@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mbiz-dev-ui-deployment
+  namespace: mbiz-dev-frontend-cicd
+  labels:
+    app: mbiz-fe-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mbiz-fe-app
+  template:
+    metadata:
+      labels:
+        app: mbiz-fe-app
+    spec:
+      containers:
+      - name: mbiz-fe-app
+        image: <ECR_IMAGE_URL>:<IMAGE_TAG>
+        ports:
+        - containerPort: 80

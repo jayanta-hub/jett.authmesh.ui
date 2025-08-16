@@ -1,0 +1,26 @@
+.modalHeader {
+    font-size: 18px !important;
+    font-weight: 600 !important;
+}
+
+.modalTitleContainer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-shrink: 0;
+    height: 128px;
+    position: relative;
+}
+
+.closeIcon {
+    position: absolute !important;
+    top: 16px;
+    right: 16px;
+}
+
+.modalList {
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    white-space: nowrap;
+}

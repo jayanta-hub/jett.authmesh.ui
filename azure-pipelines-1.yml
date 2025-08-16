@@ -1,0 +1,106 @@
+trigger:
+  branches:
+    include:
+      - development
+    exclude:
+      - main
+      
+pool:
+  name: 'musafir-agent-pool-dt'
+
+variables:
+  - group: Mbiz-AWS-Credential-var
+  - name: BUILD_CONFIGURATION
+    value: 'Release'
+  - name: S3_BUCKET_NAME
+    value: 'mbiz-frontend-deployment'
+  - name: AWS_REGION
+    value: 'ap-south-1'
+  - name: AWS_ACCOUNT_ID
+    value: '713881790687'
+  - name: CLOUDFRONT_DISTRIBUTION_ID
+    value: 'E37MC0C32TQN4P'
+
+stages:
+  - stage: BuildAndPush
+    displayName: Build 
+    jobs:
+      - job: Build
+        displayName: Build 
+
+        steps:
+          - checkout: self
+            clean: true
+
+          - task: SonarQubePrepare@7
+            displayName: 'SonarQube Prepare'
+            inputs:
+              SonarQube: 'mbiz-sonarqube'
+              scannerMode: 'CLI'
+              configMode: 'manual'
+              cliProjectKey: 'musafirdotcom_musafir.saas.ui_15a08e2c-d43c-4d8b-9bd9-e52cf25aacc3'
+              ProjectName: 'Musafir Frontend'
+              ProjectVersion: '1.0'
+              extraProperties: |
+                sonar.sources=src
+                sonar.exclusions=**/node_modules/**,**/*.spec.js,**/*.test.js,**/__tests__/**,**/coverage/**
+                sonar.javascript.lcov.reportPaths=coverage/lcov.info
+
+          - task: UseNode@1
+            inputs:
+              version: '20.x'
+            displayName: 'Install Node.js'
+
+          - script: |
+              echo "Installing dependencies and building the React app..."
+              npm install
+              npm run build
+            displayName: Install and Build App
+
+          # - script: |
+          #     echo "Running frontend tests with coverage..."
+          #     npm test -- --coverage --watchAll=false
+          #   displayName: 'Run Frontend Tests'
+            
+          - task: SonarQubeAnalyze@7
+            displayName: 'SonarQube Analyze'
+          
+          - task: SonarQubePublish@7
+            displayName: 'SonarQube Publish'
+            inputs:
+             pollingTimeoutSec: '300'
+
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: 'dist' 
+              ArtifactName: 'frontend-dev-build'
+              publishLocation: 'Container'
+
+  - stage: Deploy
+    displayName: Deploy to AWS
+    dependsOn: BuildAndPush
+    condition: succeeded()
+    jobs:
+      - job: DeployJob
+        displayName: Deploy to S3 and Invalidate CloudFront
+        steps:
+          - download: current
+            artifact: frontend-dev-build
+            displayName: 'Download build artifacts'
+
+          - script: |
+              export AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID)
+              export AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY)
+              export AWS_REGION=$(AWS_REGION)
+              aws s3 sync $(Pipeline.Workspace)/frontend-dev-build s3://$(S3_BUCKET_NAME) --delete
+            displayName: 'Sync files to S3'
+
+          - script: |
+              export AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID)
+              export AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY)
+              export AWS_REGION=$(AWS_REGION)
+              echo "Invalidating CloudFront cache..."
+              aws cloudfront create-invalidation \
+              --distribution-id $(CLOUDFRONT_DISTRIBUTION_ID) \
+              --paths "/*"
+            displayName: 'Invalidate CloudFront Cache'

@@ -1,0 +1,108 @@
+trigger:
+  branches:
+    include:
+      - development
+    exclude:
+      - main
+      - feature/*
+      - dev-mf
+
+pool:
+  name: 'musafir-agent-pool-dt'
+
+variables:
+  - group: Mbiz-AWS-Credential-var
+  - name: AWS_REGION
+    value: 'ap-south-1'
+  - name: AWS_ACCOUNT_ID
+    value: '713881790687'
+  - name: ECR_REPO_NAME
+    value: 'mu-frontend-app'
+  - name: IMAGE_TAG
+    value: $(Environment)-$(Build.BuildId)  
+  - name: Environment
+    value: 'dev' 
+
+stages:
+- stage: BuildAndPush
+  displayName: Build and Push Docker Images for DEV ENV
+  jobs:
+    - job: BuildBoth
+      displayName: Build Docker Images for DEV ENV
+      steps:
+        - checkout: self
+          clean: true
+
+        - task: UseNode@1
+          inputs:
+            version: '20.x'
+
+        - script: |
+            echo "Authenticating to AWS ECR..."
+            export AWS_ACCESS_KEY_ID=$(AWS_ACCESS_KEY_ID)
+            export AWS_SECRET_ACCESS_KEY=$(AWS_SECRET_ACCESS_KEY)
+            export AWS_REGION=$(AWS_REGION)
+            aws ecr get-login-password --region $(AWS_REGION) | docker login --username AWS --password-stdin $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+          displayName: 'Authenticate with ECR'            
+
+        - script: |
+            echo "Building DEV Docker Image..."
+            docker build --build-arg BUILD_ENV=build:dev -t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO_NAME):dev-$(Build.BuildId) .
+
+        - script: |
+            echo "Pushing DEV Docker Image..."
+            docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO_NAME):dev-$(Build.BuildId)
+          displayName: 'Push Docker Images to ECR'
+
+- stage: DeployToDEV
+  displayName: Deploy to DEV Environment
+  dependsOn: BuildAndPush
+  jobs:
+    - deployment: DeployDEV
+      environment: mbiz-dev-frontend-env
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+              - checkout: self
+                clean: true
+              - script: |
+                  sed -i "s|<ECR_IMAGE_URL>:<IMAGE_TAG>|$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/$(ECR_REPO_NAME):dev-$(Build.BuildId)|g" $(Build.SourcesDirectory)/deployments/mbiz-saas-ui-deployment.yaml
+                displayName: 'Set DEV Image in Deployment YAML'
+              - task: Kubernetes@1
+                inputs:
+                  connectionType: 'Kubernetes Service Connection'
+                  kubernetesServiceEndpoint: 'mbiz-dev-fe-cicd'
+                  command: apply
+                  arguments: '-f $(Build.SourcesDirectory)/deployments/mbiz-saas-ui-deployment.yaml -f $(Build.SourcesDirectory)/deployments/mbiz-saas-ui-service.yaml --namespace=mbiz-dev-frontend-cicd'
+                displayName: 'Deploy to DEV'
+
+              - script: |
+                   echo "Starting ECR Cleanup Process..."
+                   ENVIRONMENTS=("dev-")
+                  
+                   for ENV in "${ENVIRONMENTS[@]}"; do
+                     echo "Checking images for $ENV"
+                    
+                     IMAGE_IDS=$(aws ecr list-images --repository-name $(ECR_REPO_NAME) \
+                       --query "imageIds[?starts_with(imageTag, \`${ENV}\`)].imageTag" \
+                       --output json | jq -r '. | sort_by(.) | reverse | .[1:]')
+
+                     if [[ -z "$IMAGE_IDS" ]]; then
+                       echo "No images to delete for $ENV"
+                       continue
+                     fi
+
+                     IMAGE_IDS_STRING=$(echo "$IMAGE_IDS" | jq -r '.[]' | awk '{print "{\"imageTag\": \"" $1 "\"}"}' | paste -sd "," -)
+                    
+                     echo "Deleting old images for $ENV: $IMAGE_IDS_STRING"
+                    
+                     aws ecr batch-delete-image --repository-name $(ECR_REPO_NAME) --image-ids "[$IMAGE_IDS_STRING]"
+                   done
+                  
+                   echo "Cleanup completed!"
+                displayName: "Cleanup Old ECR Images"
+                env:
+                  AWS_ACCESS_KEY_ID: $(AWS_ACCESS_KEY_ID)
+                  AWS_SECRET_ACCESS_KEY: $(AWS_SECRET_ACCESS_KEY)
+                  AWS_DEFAULT_REGION: $(AWS_REGION)

@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mbiz-fe-app
+  namespace: mbiz-dev-frontend-cicd
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mbiz-fe-app-secret
+  namespace: mbiz-dev-frontend-cicd
+  annotations:
+    kubernetes.io/service-account.name: mbiz-fe-app
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: mbiz-fe-app-role
+  namespace: mbiz-dev-frontend-cicd
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: mbiz-fe-app-rolebinding
+  namespace: mbiz-dev-frontend-cicd
+subjects:
+  - kind: ServiceAccount
+    name: mbiz-fe-app
+    namespace: mbiz-dev-frontend-cicd
+roleRef:
+  kind: Role
+  name: mbiz-fe-app-role
+  apiGroup: rbac.authorization.k8s.io
